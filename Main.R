@@ -11,5 +11,7 @@ remove(fileURL)
 #####################
 # Cargamos los datos del dataset separados por ";" con la primera línea como cabecera
 studentMat <- read.table("./DataSets/original/student-mat.csv", row.names = NULL, sep = ";", header=TRUE) 
-studentPor <- read.table("./DataSets/original/student-mat.csv", row.names = NULL, sep = ";", header=TRUE) 
+studentPor <- read.table("./DataSets/original/student-por.csv", row.names = NULL, sep = ";", header=TRUE) 
 length(studentPor)
+
+
