@@ -1,0 +1,139 @@
+---
+title: "PracticaStudents"
+author: "Pablo Aibar"
+date: "26 March 2016"
+output: html_document
+---
+
+### Lectura y Preparación de los datos
+
+Descargamos el dataset de la web, y lo descomprimimos en la carpeta de datos
+```{r}
+fileURL <- "https://archive.ics.uci.edu/ml/machine-learning-databases/00320/student.zip"
+download.file(fileURL, destfile="./DataSets/datos.zip", method="curl")
+unzip("./DataSets/datos.zip", exdir="./DataSets/")
+remove(fileURL)
+```
+
+Leemos los datasets separando los datos por ";" y creamos una lista de dataframes con los alumnos de cada asignatura
+```{r}
+students_raw <- list()
+students_raw[["mat"]] <- read.table("./DataSets/student-mat.csv", row.names = NULL, sep = ";", header=TRUE)
+students_raw[["por"]] <- read.table("./DataSets/student-por.csv", row.names = NULL, sep = ";", header=TRUE)
+```
+
+Observamos los DataFrames para comprobar que los datos se hayan insertado correctamente
+```{r}
+View(students_raw["mat"])
+View(students_raw["por"])
+```
+
+### Transformación de los datos
+
+Los alumnos no tienen un ID que nos permita relacionarlos, y en las instrucciones del dataset nos indican que hay 382 alumnos cursando ambas asignaturas. Por lo que para identificar a los alumnos comunes a ambas materias utilizaremos las siguientes columnas:
+```{r}
+commonColumns <- c("school","sex","age","address","famsize","Pstatus","Medu","Fedu","Mjob","Fjob","reason","nursery","internet")
+sapply(students_raw, function(x) 
+  {
+    c(nrow(x), nrow(unique(x[,commonColumns])))
+  })
+```
+#
+Para estructurar los datos, creamos un único dataset fusionando los 382 alumnos duplicados con las columnas comunes
+```{r}
+allStudents <- rbind(students_raw$mat[,commonColumns], students_raw$por[, commonColumns])
+allStudents <- unique(allStudents)
+```
+#
+Para comprobar que la fusión de ambos datasets se hizo correctamente y que no perdimos ningún registro, comprobamos que la suma de las dimensiones de los dos datasets originales (mat y por) menos los 382 alumnos repetidos, sean iguales a la dimensión del nuevo dataframe
+```{r}
+dim(students_raw[["mat"]])[1]+dim(students_raw[["por"]])[1]-382
+dim(allStudents)[1]
+```
+#
+Ahora que ya tenemos los registros fusionados creamos una secuencia numérica que utilizaremos como ID.
+```{r}
+allStudents <- cbind(id=1001:(1000+nrow(allStudents)), allStudents)
+head(allStudents)
+```
+#
+Como en el dataframe "allStudents" guardamos únicamente las columnas identificativas del alumno, necesitamos ahora vincularlas con los dataframes de las asignaturas
+```{r}
+studentScores <- lapply(students_raw, function(x) 
+  {
+    tmp <- merge(allStudents, x, by=commonColumns)
+    tmp[,which(!colnames(tmp) %in% commonColumns)]
+  }) 
+sapply(studentScores, dim)
+```
+#
+Ahora ya tenemos un dataframe con los datos personales del alumno y otros con los datos académicos
+```{r}
+head(allStudents)
+head(studentScores$mat)
+```
+
+
+### Análisis exploratorio
+Calculamos la media de la nota final (G3) agrupado por horas de estudio para ver si podemos observar algún tipo de relación
+```{r}
+aggregate(studentScores$mat["G3"], studentScores$mat["studytime"], mean)
+aggregate(studentScores$por["G3"], studentScores$por["studytime"], mean)
+```
+#
+Mostramos en un gráfico las horas de estudio y el tiempo libre para ver si hay correlación entre ambas variables
+```{r}
+plot(data.frame(studentScores$mat[,"studytime"], studentScores$mat[,"freetime"]), col="#60006008", pch=16)
+```
+
+
+
+### Modelado
+
+Aplicamos un RandomForest para identificar las variables mas relevantes respecto a G3
+```{r, message=FALSE}
+library(randomForest)
+incCols <- unique(c(colnames(allStudents), colnames(head(studentScores$mat)[,2:18])))[-1]
+thisMat <- merge(allStudents, studentScores$mat, by="id")
+thisMat <- lapply(split(thisMat, thisMat$id), function(x)
+{
+  x[which.max(x$G3),]
+})
+thisMat <- do.call(rbind, thisMat)
+rownames(thisMat) <- thisMat$id
+rf1 <- randomForest(x=thisMat[,incCols], y=thisMat$G3, importance=TRUE, ntree=1000, proximity=TRUE)
+imp <- importance(rf1)
+imp <- imp[order(imp[,1], decreasing=T),]
+imp
+```
+
+
+### Evaluación del modelo
+En el modelado del randomForest llegamos a la conclusión de que el número de veces que se repite curso y las ausencias son las variables con mayor influencia sobre la nota final (G3). Y que las actividades extraescolares y el tamaño familiar apenas afectan.
+
+#
+
+Para comprobar la fiabilidad del modelo, hemos comparado la media de la nota final respecto a las ausencias (Una de las variables mas relevantes segun el RandomForest).
+Sin embargo, como podemos observar en el gráfico, no se aprecia ningún tipo de relación entre las ausencias y la nota final. Hay alumnos que faltando menos de 5 veces obtienen notas similares a alumnos con más de 40 faltas.
+```{r}
+plot(aggregate(studentScores$mat["G3"], studentScores$mat["absences"], mean))
+```
+
+Otra de las variables consideradas como "alta influencia" por el RandomForest es el soporte escolar (clases particulares). Sin embargo en el HeatMap no se aprecia ninguna relación. De hecho, los alumnos con clases extraescolares obtienen resultados similares al resto de alumnos
+```{r}
+smoothScatter(studentScores$mat[,"G3"], studentScores$mat[,"schoolsup"])
+```
+
+
+### Interpretación de los datos
+En el análisis exploratorio podemos observar que hay una clara relación entre las notas finales y las horas de estudio. No obstante se puede apreciar que no es una relación lineal, que el numero óptimo de horas de estudio es de 3horas por asignatura, mas allá de eso no se produce un aumento de la calificación.
+
+Respecto a las horas de estudio y el tiempo libre, no parece haber ningún tipo de relación. La mayoría de alumnos estudian entre una y dos horas, independientemente de que tengan 2 o 4horas libres. 
+
+En cuanto al modelado del RandomForest, no parece ser efectivo en este caso particular (o no lo he modelado correctamente). Y las variables que detecta como altamente relacionadas respecto a las notas, en realidad no tienen relación.
+
+
+
+
+
+
